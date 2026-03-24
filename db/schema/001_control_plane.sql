@@ -60,6 +60,7 @@ create table if not exists approval_requests (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   conversation_id uuid not null references conversations(id) on delete cascade,
   command text not null,
+  parameters jsonb not null default '{}'::jsonb,
   status text not null check (status in ('pending', 'approved', 'rejected')),
   requested_by text not null references users(id),
   requested_at timestamptz not null default now(),
@@ -75,4 +76,19 @@ create table if not exists audit_events (
   outcome text not null,
   details jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
+);
+
+create table if not exists sessions (
+  token text primary key,
+  user_id text not null references users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists supabase_integrations (
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  user_id text not null references users(id) on delete cascade,
+  encrypted_access_token text not null,
+  organization_id text,
+  connected_at timestamptz not null default now(),
+  primary key (workspace_id, user_id)
 );

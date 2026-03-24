@@ -1,5 +1,5 @@
 import type { Role, WorkspaceMembership } from "../domain/types.js";
-import { db } from "../infra/inMemoryStore.js";
+import { repository } from "../infra/database.js";
 
 const rolePower: Record<Role, number> = {
   viewer: 10,
@@ -11,14 +11,11 @@ const rolePower: Record<Role, number> = {
 export const getMembership = (
   workspaceId: string,
   userId: string
-): WorkspaceMembership | undefined =>
-  db.memberships.get(db.membershipKey(workspaceId, userId));
+): Promise<WorkspaceMembership | undefined> =>
+  repository.getMembership(workspaceId, userId);
 
-export const upsertMembership = (membership: WorkspaceMembership): void => {
-  db.memberships.set(
-    db.membershipKey(membership.workspaceId, membership.userId),
-    membership
-  );
+export const upsertMembership = async (membership: WorkspaceMembership): Promise<void> => {
+  await repository.upsertMembership(membership.workspaceId, membership.userId, membership.role);
 };
 
 export const hasRoleAtLeast = (

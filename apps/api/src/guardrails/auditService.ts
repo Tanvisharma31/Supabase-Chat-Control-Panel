@@ -1,5 +1,5 @@
-import { db } from "../infra/inMemoryStore.js";
 import type { AuditEvent } from "../domain/types.js";
+import { repository } from "../infra/database.js";
 
 export const appendAuditEvent = (
   workspaceId: string,
@@ -7,21 +7,7 @@ export const appendAuditEvent = (
   action: string,
   outcome: AuditEvent["outcome"],
   details: Record<string, string>
-): AuditEvent => {
-  const event: AuditEvent = {
-    id: crypto.randomUUID(),
-    workspaceId,
-    actorId,
-    action,
-    outcome,
-    details,
-    createdAt: new Date().toISOString()
-  };
-  db.auditEvents.set(event.id, event);
-  return event;
-};
+): Promise<AuditEvent> => repository.appendAuditEvent(workspaceId, actorId, action, outcome, details);
 
-export const listAuditEvents = (workspaceId: string): AuditEvent[] =>
-  [...db.auditEvents.values()]
-    .filter((event) => event.workspaceId === workspaceId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+export const listAuditEvents = (workspaceId: string): Promise<AuditEvent[]> =>
+  repository.listAuditEvents(workspaceId);

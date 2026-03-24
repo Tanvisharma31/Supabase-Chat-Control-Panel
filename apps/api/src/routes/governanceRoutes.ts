@@ -10,24 +10,29 @@ const approvalReviewSchema = z.object({
 
 export const governanceRouter = Router({ mergeParams: true });
 
-governanceRouter.get("/audit-events", withTenantAccess("admin"), (request: TenantRequest, response) => {
+governanceRouter.get("/audit-events", withTenantAccess("admin"), async (request: TenantRequest, response) => {
   if (!request.workspaceId) {
     response.status(400).json({ error: "Missing workspace context." });
     return;
   }
-  response.json(listAuditEvents(request.workspaceId));
+  response.json(await listAuditEvents(request.workspaceId));
 });
 
 governanceRouter.post(
   "/approvals/:approvalId/review",
   withTenantAccess("admin"),
-  (request: TenantRequest, response) => {
+  async (request: TenantRequest, response) => {
     const parsed = approvalReviewSchema.safeParse(request.body);
     if (!parsed.success || !request.actor) {
       response.status(400).json({ error: "Invalid review payload." });
       return;
     }
-    const approval = reviewApprovalRequest(
+    if (!request.workspaceId) {
+      response.status(400).json({ error: "Missing workspace context." });
+      return;
+    }
+    const approval = await reviewApprovalRequest(
+      request.workspaceId,
       request.params.approvalId,
       request.actor.id,
       parsed.data.decision

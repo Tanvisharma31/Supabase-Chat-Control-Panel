@@ -5,11 +5,12 @@ Chat-first multi-tenant control plane for Supabase. Users log in, connect their 
 ## What is included
 
 - Login + logout flow with user sessions.
-- Bring-your-own Supabase access token onboarding.
+- Bring-your-own Supabase access token onboarding (`GET /auth/me?workspaceId=<uuid>` reflects the active workspace connection).
 - Multi-tenant workspace model from day one.
 - Chat command toolbox split by `Projects`, `Databases`, and `Governance`.
 - Conversation history (switch between previous chats per workspace).
 - Role-based approvals for sensitive actions.
+- Persistent SQL-backed control-plane storage (users, workspaces, sessions, chat history, approvals, audits).
 
 ## Quick start
 
@@ -25,10 +26,12 @@ Chat-first multi-tenant control plane for Supabase. Users log in, connect their 
 4. Open:
    - [http://localhost:5173](http://localhost:5173)
 5. Login from UI.
-6. Connect Supabase from **SUPABASE LINK** panel:
-   - Go to Supabase Dashboard -> Profile -> Access Tokens
-   - Generate token and paste in app
-   - Optional: provide organization id, otherwise first org is auto-picked
+6. Connect Supabase directly from chat:
+   - `connect supabase` (uses server env token/org)
+   - or `connect supabase sbp_xxx`
+   - or `connect supabase sbp_xxx org_id`
+   - Optional UI panel is still available as fallback
+   - Note: connection is workspace-scoped (active workspace must be selected)
 
 ## Core commands
 
@@ -37,6 +40,11 @@ Chat-first multi-tenant control plane for Supabase. Users log in, connect their 
 - `list databases`
 - `create database tenant_a in proj_xxx`
 - `list tables`
+- `seed ecommerce`
+- `list branches`
+- `create branch staging`
+- `list edge functions`
+- `deploy edge function hello-world`
 - `grant admin to user_id`
 - `list requests`
 - `approve request <id>`
@@ -45,6 +53,13 @@ Chat-first multi-tenant control plane for Supabase. Users log in, connect their 
 ## Multi-tenant architecture notes
 
 - Each user owns a session and optional Supabase integration.
+- Supabase integrations are stored per `(workspace_id, user_id)` for strict tenant isolation.
 - Workspace membership controls access (`owner`, `admin`, `operator`, `viewer`).
 - Command execution uses the requesting user’s connected Supabase token.
 - MCP integration is extensible via `SupabaseMcpClient` and `McpOrchestrator`.
+
+## Persistence model
+
+- Control-plane state is persisted in embedded Postgres (`.control-plane-db`) through `@electric-sql/pglite`.
+- Base schema lives in `db/schema/001_control_plane.sql`.
+- Runtime initializes schema automatically on API boot.

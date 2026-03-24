@@ -22,12 +22,13 @@ const splitCommand = (value: string): { command: string; args: string[] } => {
 const readConfigFromEnv = (): RealSupabaseMcpConfig => {
   const raw = process.env.SUPABASE_MCP_COMMAND ?? "";
   const { command, args } = splitCommand(raw);
+  const normalizedRegion = process.env.SUPABASE_PROJECT_REGION?.trim() || "us-east-1";
   return {
     serverCommand: command,
     serverArgs: args,
     serverEnv: process.env as Record<string, string>,
     defaultOrganizationId: process.env.SUPABASE_ORGANIZATION_ID,
-    defaultRegion: process.env.SUPABASE_PROJECT_REGION ?? "us-east-1"
+    defaultRegion: normalizedRegion
   };
 };
 
@@ -51,7 +52,8 @@ export class RealSupabaseMcpClient implements SupabaseMcpClient {
   private getClientKey(context?: CommandContext): string {
     const token = context?.supabaseAccessToken ?? this.config.serverEnv?.SUPABASE_ACCESS_TOKEN ?? "default";
     const org = context?.supabaseOrganizationId ?? this.config.defaultOrganizationId ?? "default";
-    return `${token}:${org}`;
+    const workspace = context?.workspaceId ?? "global";
+    return `${workspace}:${token}:${org}`;
   }
 
   private async getClient(context?: CommandContext): Promise<Client> {
@@ -118,9 +120,12 @@ export class RealSupabaseMcpClient implements SupabaseMcpClient {
     return this.callTool("create_project", {
       name: name || mapWorkspaceToProjectName(workspaceId),
       region: region ?? this.config.defaultRegion ?? "us-east-1",
-      organization_id: organizationId,
-      db_pass: "SecureSupabase.123!!"
+      organization_id: organizationId
     }, context);
+  }
+
+  async deleteProject(projectRef: string, context?: CommandContext): Promise<unknown> {
+    return this.callTool("delete_project", { project_id: projectRef }, context);
   }
 
   async listDatabases(projectRef: string, context?: CommandContext): Promise<unknown> {
@@ -159,6 +164,46 @@ export class RealSupabaseMcpClient implements SupabaseMcpClient {
       schemas: ["public"],
       verbose: true
     }, context);
+  }
+
+  async listBranches(projectRef: string, context?: CommandContext): Promise<unknown> {
+    return this.callTool("list_branches", { project_id: projectRef }, context);
+  }
+
+  async createBranch(
+    projectRef: string,
+    branchName: string,
+    context?: CommandContext
+  ): Promise<unknown> {
+    return this.callTool("create_branch", { project_id: projectRef, name: branchName }, context);
+  }
+
+  async listEdgeFunctions(projectRef: string, context?: CommandContext): Promise<unknown> {
+    return this.callTool("list_edge_functions", { project_id: projectRef }, context);
+  }
+
+  async deployEdgeFunction(
+    projectRef: string,
+    functionName: string,
+    context?: CommandContext
+  ): Promise<unknown> {
+    const source = `import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+Deno.serve(async () =>
+  new Response(JSON.stringify({ ok: true, function: "${functionName}" }), {
+    headers: { "Content-Type": "application/json" }
+  })
+);`;
+    return this.callTool(
+      "deploy_edge_function",
+      {
+        project_id: projectRef,
+        name: functionName,
+        verify_jwt: true,
+        files: [{ name: "index.ts", content: source }]
+      },
+      context
+    );
   }
 
   async executeSql(

@@ -1,12 +1,25 @@
-import { useEffect, useMemo, useState, useRef, FormEvent } from "react";
-import { ThemeToggle } from "../../../packages/ui/src/index.js";
-import { User, Send, Bot, TerminalSquare, Settings, Zap, ShieldCheck, Command, Key, Database, Activity, LogOut } from "lucide-react";
+import { useEffect, useMemo, useState, useRef, FormEvent, ChangeEvent } from "react";
+import { ChatPanel } from "./components/ChatPanel.js";
+import { LeftSidebar } from "./components/LeftSidebar.js";
+import { LoginView } from "./components/LoginView.js";
+import { RightSidebar } from "./components/RightSidebar.js";
+import { ChatMessage, ConversationListItem, Suggestion, WorkspaceOption } from "./components/types.js";
 
-interface Suggestion {
-  id: string;
-  label: string;
-  type: 'project' | 'request';
-}
+const WELCOME_MESSAGE = `Welcome to the control plane.
+
+Commands:
+- create project <name>
+- delete project [<project_ref>] (needs approval; uses sidebar ref if omitted)
+- list projects
+- create database <db_name> in <project_ref>
+- list databases
+- list tables
+- seed ecommerce
+- grant admin to <user_id>
+- list requests / approve request <id> / reject request <id>
+
+Set Project Ref and Schema (logical database) in the sidebar before running SQL.
+Use @ to mention projects or pending requests.`;
 
 export function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
@@ -16,8 +29,9 @@ export function App() {
   const [userId, setUserId] = useState("");
   const [workspaceName, setWorkspaceName] = useState("My Organization");
   const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [conversationId, setConversationId] = useState("");
-  const [conversationList, setConversationList] = useState<Array<{ id: string; createdAt: string }>>([]);
+  const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
   const [projectRef, setProjectRef] = useState("");
   const [databaseName, setDatabaseName] = useState("");
   const [accessToken, setAccessToken] = useState("");
@@ -31,12 +45,8 @@ export function App() {
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(-1);
 
-  const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([
-    {
-      role: "assistant",
-      content: "Control Plane initialized. Use @ to mention projects or requests."
-    }
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([{ role: "assistant", content: WELCOME_MESSAGE }]);
+  const [sessionPreview, setSessionPreview] = useState("");
   const [status, setStatus] = useState("Offline");
   
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -64,6 +74,42 @@ export function App() {
     localStorage.setItem("cp_auth_token", authToken);
   }, [authToken]);
 
+  const loadHistory = async (nextWorkspaceId: string) => {
+    const res = await fetch(`/api/workspaces/${nextWorkspaceId}/conversations`, { headers: authHeaders });
+    if (!res.ok) return;
+    const rows = await res.json();
+    setConversationList(rows.map((row: { id: string; createdAt: string }) => ({ id: row.id, createdAt: row.createdAt })));
+  };
+
+  const loadConversationMessages = async (wsId: string, nextConversationId: string) => {
+    if (!wsId || !nextConversationId) return;
+    const response = await fetch(
+      `/api/workspaces/${wsId}/conversations/${nextConversationId}/messages`,
+      { headers: authHeaders }
+    );
+    if (!response.ok) return;
+    const items = await response.json();
+    setConversationId(nextConversationId);
+    setMessages(
+      items.length > 0
+        ? items.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content }))
+        : [{ role: "assistant", content: WELCOME_MESSAGE }]
+    );
+  };
+
+  const startNewConversation = async (wsId: string) => {
+    const cRes = await fetch(`/api/workspaces/${wsId}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders },
+      body: JSON.stringify({ channel: "web" })
+    });
+    if (!cRes.ok) return;
+    const c = await cRes.json();
+    setConversationId(c.id);
+    await loadHistory(wsId);
+    setMessages([{ role: "assistant", content: WELCOME_MESSAGE }]);
+  };
+
   useEffect(() => {
     const hydrate = async () => {
       if (!authToken) return;
@@ -75,9 +121,36 @@ export function App() {
       }
       const payload = await res.json();
       setUserId(payload.user.id);
-      setIsSupabaseConnected(Boolean(payload.integration));
-      if (payload.integration?.organizationId) {
-        setOrganizationId(payload.integration.organizationId);
+      setSessionPreview(payload.session?.id ?? authToken.slice(0, 8));
+
+      const workspaceRes = await fetch("/api/workspaces", { headers: authHeaders });
+      if (workspaceRes.ok) {
+        const rows = await workspaceRes.json();
+        setWorkspaces(rows.map((row: { id: string; name: string }) => ({ id: row.id, name: row.name })));
+        if (rows[0]?.id) {
+          const wid = rows[0].id as string;
+          setWorkspaceId(wid);
+          const meWs = await fetch(`/api/auth/me?workspaceId=${encodeURIComponent(wid)}`, {
+            headers: authHeaders
+          });
+          if (meWs.ok) {
+            const scoped = await meWs.json();
+            setIsSupabaseConnected(Boolean(scoped.integration));
+            if (scoped.integration?.organizationId) {
+              setOrganizationId(scoped.integration.organizationId);
+            }
+          }
+          await loadHistory(wid);
+          const convRes = await fetch(`/api/workspaces/${wid}/conversations`, { headers: authHeaders });
+          if (convRes.ok) {
+            const convRows = await convRes.json();
+            if (convRows[0]?.id) {
+              await loadConversationMessages(wid, convRows[0].id as string);
+            } else {
+              await startNewConversation(wid);
+            }
+          }
+        }
       }
       setStatus("Online");
     };
@@ -98,6 +171,7 @@ export function App() {
     const payload = await res.json();
     setAuthToken(payload.token);
     setUserId(payload.user.id);
+    setSessionPreview(String(payload.token).slice(0, 8));
     setIsSupabaseConnected(Boolean(payload.hasSupabaseIntegration));
     setStatus("Authenticated");
   };
@@ -115,24 +189,21 @@ export function App() {
     setWorkspaceId("");
     setConversationId("");
     setConversationList([]);
-    setMessages([
-      {
-        role: "assistant",
-        content: "Control Plane initialized. Use @ to mention projects or requests."
-      }
-    ]);
+    setMessages([{ role: "assistant", content: WELCOME_MESSAGE }]);
+    setSessionPreview("");
     setStatus("Offline");
   };
 
   const connectSupabase = async () => {
-    if (!authToken || !accessToken.trim()) return;
+    if (!authToken || !accessToken.trim() || !workspaceId) return;
     setStatus("Connecting Supabase...");
     const res = await fetch("/api/auth/supabase/connect", {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({
         accessToken,
-        organizationId: organizationId || undefined
+        organizationId: organizationId || undefined,
+        workspaceId
       })
     });
     const payload = await res.json();
@@ -156,25 +227,6 @@ export function App() {
     ]);
   };
 
-  const loadConversationMessages = async (nextConversationId: string) => {
-    if (!workspaceId || !nextConversationId) return;
-    const response = await fetch(
-      `/api/workspaces/${workspaceId}/conversations/${nextConversationId}/messages`,
-      { headers: authHeaders }
-    );
-    if (!response.ok) return;
-    const items = await response.json();
-    setConversationId(nextConversationId);
-    setMessages(items.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content })));
-  };
-
-  const loadHistory = async (nextWorkspaceId: string) => {
-    const res = await fetch(`/api/workspaces/${nextWorkspaceId}/conversations`, { headers: authHeaders });
-    if (!res.ok) return;
-    const rows = await res.json();
-    setConversationList(rows.map((row: { id: string; createdAt: string }) => ({ id: row.id, createdAt: row.createdAt })));
-  };
-
   const bootstrap = async () => {
     if (!authToken) return;
     setStatus("Bootstrapping...");
@@ -186,18 +238,45 @@ export function App() {
     if (!res.ok) { setStatus("Error"); return; }
     const ws = await res.json();
     setWorkspaceId(ws.id);
+    setWorkspaces((prev) => [{ id: ws.id, name: ws.name }, ...prev.filter((item) => item.id !== ws.id)]);
     const cRes = await fetch(`/api/workspaces/${ws.id}/conversations`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ channel: "web" })
     });
     const c = await cRes.json();
-    setConversationId(c.id);
     await loadHistory(ws.id);
+    await loadConversationMessages(ws.id, c.id);
     setStatus("Online");
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const switchWorkspace = async (nextWorkspaceId: string) => {
+    if (!nextWorkspaceId) return;
+    setWorkspaceId(nextWorkspaceId);
+    setConversationId("");
+    setMessages([{ role: "assistant", content: "Switching workspace…" }]);
+    const meWs = await fetch(`/api/auth/me?workspaceId=${encodeURIComponent(nextWorkspaceId)}`, {
+      headers: authHeaders
+    });
+    if (meWs.ok) {
+      const scoped = await meWs.json();
+      setIsSupabaseConnected(Boolean(scoped.integration));
+      if (scoped.integration?.organizationId) {
+        setOrganizationId(scoped.integration.organizationId);
+      }
+    }
+    await loadHistory(nextWorkspaceId);
+    const convRes = await fetch(`/api/workspaces/${nextWorkspaceId}/conversations`, { headers: authHeaders });
+    if (!convRes.ok) return;
+    const convRows = await convRes.json();
+    if (convRows[0]?.id) {
+      await loadConversationMessages(nextWorkspaceId, convRows[0].id as string);
+    } else {
+      await startNewConversation(nextWorkspaceId);
+    }
+  };
+
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     const pos = e.target.selectionStart || 0;
     setInput(val);
@@ -324,232 +403,95 @@ export function App() {
 
   if (!authToken) {
     return (
-      <main style={{ display: "grid", placeItems: "center", minHeight: "100vh", background: "var(--bg)", padding: "24px" }}>
-        <section style={{ ...panelStyle, width: "440px", boxShadow: "var(--shadow-lg)" }}>
-          <div style={panelHeader}><Settings size={12} /> LOGIN</div>
-          <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "12px" }}>
-            <h2 style={{ margin: "0 0 4px 0", fontSize: "1rem" }}>Supabase Chat Control Plane</h2>
-            <label style={fieldLabel}>Email</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} style={smallInput} />
-            <label style={fieldLabel}>Display Name</label>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} style={smallInput} />
-            <button onClick={login} style={initializeButton}>Sign In</button>
-            <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-              Multi-tenant mode: each login gets isolated workspace memberships and chat history.
-            </span>
-          </div>
-        </section>
-      </main>
+      <LoginView
+        email={email}
+        displayName={displayName}
+        onEmailChange={setEmail}
+        onDisplayNameChange={setDisplayName}
+        onLogin={() => {
+          void login();
+        }}
+      />
     );
   }
 
   return (
-    <main style={{ display: "flex", height: "100vh", padding: "20px", gap: "18px", backgroundColor: "var(--bg)", overflow: "hidden" }}>
+    <main
+      style={{
+        display: "flex",
+        alignItems: "stretch",
+        minHeight: 0,
+        height: "100vh",
+        maxHeight: "100vh",
+        boxSizing: "border-box",
+        padding: "20px",
+        gap: "18px",
+        backgroundColor: "var(--bg)",
+        overflow: "hidden"
+      }}
+    >
       
-      {/* LEFT */}
-      <aside style={{ width: "280px", minWidth: "280px", display: "flex", flexDirection: "column", gap: "16px", overflowY: "auto", paddingRight: "6px" }}>
-        <div style={{...panelStyle, padding: "14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", minHeight: "64px"}}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-            <div style={{ background: "var(--text)", color: "var(--bg)", borderRadius: "6px", width: "30px", height: "30px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <TerminalSquare size={16} />
-            </div>
-            <h1 style={{ margin: 0, fontSize: "0.88rem", fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>CONTROL PLANE</h1>
-          </div>
-          <ThemeToggle theme={theme} onToggle={() => setTheme(t => t === 'light' ? 'dark' : 'light')} />
-        </div>
+      <LeftSidebar
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+        userId={userId}
+        workspaceName={workspaceName}
+        onWorkspaceNameChange={setWorkspaceName}
+        workspaceId={workspaceId}
+        workspaces={workspaces}
+        status={status}
+        isOnline={isOnline}
+        onSwitchWorkspace={(value) => {
+          void switchWorkspace(value);
+        }}
+        onBootstrap={() => {
+          void bootstrap();
+        }}
+        onLogout={() => {
+          void logout();
+        }}
+        accessToken={accessToken}
+        onAccessTokenChange={setAccessToken}
+        organizationId={organizationId}
+        onOrganizationIdChange={setOrganizationId}
+        isSupabaseConnected={isSupabaseConnected}
+        onConnectSupabase={() => {
+          void connectSupabase();
+        }}
+        projectRef={projectRef}
+        onProjectRefChange={setProjectRef}
+        databaseName={databaseName}
+        onDatabaseNameChange={setDatabaseName}
+        conversationList={conversationList}
+        conversationId={conversationId}
+        onLoadConversationMessages={(id) => {
+          void loadConversationMessages(workspaceId, id);
+        }}
+        onNewChat={() => {
+          if (workspaceId) void startNewConversation(workspaceId);
+        }}
+      />
 
-        <div style={panelStyle}>
-          <div style={panelHeader}><Settings size={12} /> CONNECTION</div>
-          <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
-             <div style={fieldGroup}>
-                <label style={fieldLabel}>User ID</label>
-                <input value={userId} readOnly style={smallInput} />
-             </div>
-             <div style={fieldGroup}>
-                <label style={fieldLabel}>Workspace Name</label>
-                <input value={workspaceName} onChange={e=>setWorkspaceName(e.target.value)} style={smallInput} />
-             </div>
-             <button 
-                onClick={bootstrap} 
-                disabled={status === "Bootstrapping..." || isOnline}
-                style={{...initializeButton, opacity: (status === 'Bootstrapping...' || isOnline) ? 0.5 : 1}}
-             >
-                <Zap size={14} fill="currentColor" />
-                {status === "Bootstrapping..." ? "INITIALIZING..." : isOnline ? "CONNECTED" : "Initialize"}
-             </button>
-             <button onClick={logout} style={{ ...tagStyle, marginTop: "4px", width: "100%", padding: "8px" }}>
-              <LogOut size={12} style={{ marginRight: "6px", verticalAlign: "middle" }} /> logout
-             </button>
-          </div>
-          <div style={{ borderTop: "1px solid var(--border)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.65rem", fontWeight: 700 }}>
-             <span style={{ color: "var(--muted)" }}>STATUS</span>
-             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: isOnline ? "#10b981" : "var(--muted)" }} />
-                <span style={{ opacity: 0.8 }}>{status.toUpperCase()}</span>
-             </div>
-          </div>
-        </div>
+      <ChatPanel
+        workspaceId={workspaceId}
+        conversationId={conversationId}
+        sessionPreview={sessionPreview}
+        status={status}
+        isOnline={isOnline}
+        messages={messages}
+        bottomRef={bottomRef}
+        inputRef={inputRef}
+        input={input}
+        onInputChange={handleInputChange}
+        onSubmit={(e, override) => {
+          void sendMessage(e, override);
+        }}
+        showMentions={showMentions}
+        filteredSuggestions={filteredSuggestions}
+        onSelectMention={selectMention}
+      />
 
-        <div style={panelStyle}>
-          <div style={panelHeader}><Key size={12} /> SUPABASE LINK</div>
-          <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
-             <div style={{ fontSize: "0.72rem", color: "var(--muted)", lineHeight: 1.4 }}>
-              Profile &gt; Access Tokens se token create karo, then yahan paste karke connect karo.
-             </div>
-             <div style={fieldGroup}><label style={fieldLabel}>Access Token</label><input value={accessToken} onChange={e=>setAccessToken(e.target.value)} style={smallInput} placeholder="sbp_xxx" /></div>
-             <div style={fieldGroup}><label style={fieldLabel}>Org ID (optional)</label><input value={organizationId} onChange={e=>setOrganizationId(e.target.value)} style={smallInput} /></div>
-             <button onClick={connectSupabase} disabled={!accessToken.trim()} style={initializeButton}>Connect Supabase</button>
-             <div style={{ fontSize: "0.7rem", color: isSupabaseConnected ? "#10b981" : "var(--muted)" }}>
-              {isSupabaseConnected ? "Connected" : "Not connected"}
-             </div>
-          </div>
-        </div>
-
-        <div style={panelStyle}>
-          <div style={panelHeader}><Database size={12} /> ENVIRONMENT</div>
-          <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
-            <div style={fieldGroup}><label style={fieldLabel}>Project Ref</label><input value={projectRef} onChange={e=>setProjectRef(e.target.value)} style={smallInput} /></div>
-            <div style={fieldGroup}><label style={fieldLabel}>Schema</label><input value={databaseName} onChange={e=>setDatabaseName(e.target.value)} style={smallInput} /></div>
-          </div>
-        </div>
-
-        <div style={panelStyle}>
-          <div style={panelHeader}><Activity size={12} /> HISTORY</div>
-          <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: "8px", overflowY: "auto", maxHeight: "320px" }}>
-            {conversationList.length === 0 && <span style={{fontSize: "0.7rem", color:"var(--muted)"}}>No chats yet.</span>}
-            {conversationList.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => loadConversationMessages(c.id)}
-                  style={{
-                    ...historyBtnStyle,
-                    background: conversationId === c.id ? "var(--surface-hover)" : "transparent",
-                    color: conversationId === c.id ? "var(--text)" : "var(--muted)",
-                    borderColor: conversationId === c.id ? "var(--border)" : "transparent"
-                  }}
-              >
-                {c.id.slice(0, 8)}... {new Date(c.createdAt).toLocaleTimeString()}
-              </button>
-            ))}
-          </div>
-        </div>
-      </aside>
-
-      {/* CENTER */}
-      <section style={{ flex: 1, display: "flex", flexDirection: "column", ...panelStyle, backgroundColor: "var(--surface)", position: "relative", boxShadow: "var(--shadow-md)" }}>
-        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--bg)", opacity: 0.92 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>Chat Workspace</div>
-            {workspaceId && <span style={{ fontSize: "0.7rem", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>{workspaceId.slice(0, 10)}...</span>}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.7rem", fontWeight: 700, color: isOnline ? "#10b981" : "var(--muted)" }}>
-             <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: isOnline ? "#10b981" : "var(--muted)" }} />
-             {status.toUpperCase()}
-          </div>
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: "26px", display: "flex", flexDirection: "column", gap: "20px", background: "linear-gradient(180deg, transparent 0%, rgba(127,127,127,0.03) 100%)" }}>
-          {messages.map((m, i) => (
-             <div key={i} style={{ display: "flex", gap: "12px", maxWidth: m.role === 'assistant' ? "90%" : "82%", alignSelf: m.role === 'assistant' ? "flex-start" : "flex-end", flexDirection: m.role === 'assistant' ? "row" : "row-reverse" }}>
-               <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: m.role==='assistant' ? "var(--bg)" : "var(--text)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: m.role==='assistant' ? "var(--text)" : "var(--bg)", flexShrink: 0 }}>
-                 {m.role==='assistant' ? <Bot size={16}/> : <User size={16}/>}
-               </div>
-               <div style={{ background: m.role==='assistant' ? "rgba(127,127,127,0.06)" : "var(--bg)", color: "var(--text)", padding: "12px 14px", borderRadius: "10px", border: "1px solid var(--border)", fontSize: "0.9rem", lineHeight: 1.45, fontFamily: m.role==='assistant' ? "var(--font-mono)" : "inherit", whiteSpace: "pre-wrap", boxShadow: "var(--shadow-sm)" }}>
-                 {m.content}
-               </div>
-             </div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* INPUT AREA WITH MENTIONS */}
-        <div style={{ padding: "18px 20px 20px", borderTop: "1px solid var(--border)", background: "var(--bg)", position: "relative" }}>
-           
-           {showMentions && filteredSuggestions.length > 0 && (
-             <div style={{ position: "absolute", bottom: "100%", left: "20px", width: "280px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", boxShadow: "var(--shadow-lg)", marginBottom: "8px", zIndex: 1000, overflow: "hidden" }}>
-                <div style={{ padding: "8px 12px", fontSize: "0.65rem", fontWeight: 800, color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>SUGGESTIONS</div>
-                <div style={{ maxHeight: "200px", overflowY: "auto" }}>
-                   {filteredSuggestions.map(s => (
-                      <div key={s.id} onClick={() => selectMention(s)} style={{ padding: "10px 12px", fontSize: "0.85rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px", transition: "all 0.1s" }} onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                         {s.type === 'project' ? <Database size={12} /> : <ShieldCheck size={12} />}
-                         <div style={{display: "flex", flexDirection: "column"}}>
-                            <span style={{fontWeight:500}}>{s.label}</span>
-                            <span style={{fontSize: "0.7rem", opacity: 0.5}}>{s.id}</span>
-                         </div>
-                      </div>
-                   ))}
-                </div>
-             </div>
-           )}
-
-           <form onSubmit={sendMessage} style={{ position: "relative", maxWidth: "860px", margin: "0 auto", display: "flex", gap: "10px" }}>
-              <div style={{ flex: 1, position: "relative" }}>
-                 <span style={{ position: "absolute", left: "14px", top: "12px", color: "var(--muted)", fontWeight: 700 }}>$</span>
-                 <input ref={inputRef} value={input} onChange={handleInputChange} disabled={!workspaceId} placeholder="Type @ to mention..." style={mainInput} />
-              </div>
-              <button type="submit" disabled={!workspaceId || !input.trim()} style={sendButton}><Send size={18} /></button>
-           </form>
-           
-           <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginTop: "12px" }}>
-              <button onClick={() => sendMessage(undefined, "list projects")} style={tagStyle}>list projects</button>
-              <button onClick={() => sendMessage(undefined, "list pending")} style={tagStyle}>list requests</button>
-           </div>
-        </div>
-      </section>
-
-      {/* RIGHT */}
-      <aside style={{ width: "280px", display: "flex", flexDirection: "column", gap: "16px", overflowY: "auto", paddingRight: "6px" }}>
-        <div style={{...panelStyle, flex: 1, display: "flex", flexDirection: "column"}}>
-          <div style={panelHeader}><Command size={12} /> TOOLBOX</div>
-          <div style={{ padding: "10px", display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={toolboxGroupTitle}>Projects</span>
-            <ActionBtn label="List Projects" cmd="list projects" onClick={setInput} />
-            <ActionBtn label="Create Project" cmd="create project " onClick={setInput} />
-            <span style={toolboxGroupTitle}>Databases</span>
-            <ActionBtn label="List Databases" cmd="list databases" onClick={setInput} />
-            <ActionBtn label="Create Database" cmd="create database tenant_a in proj_" onClick={setInput} />
-            <ActionBtn label="List Tables" cmd="list tables" onClick={setInput} />
-            <span style={toolboxGroupTitle}>Governance</span>
-            <ActionBtn label="List Requests" cmd="list requests" onClick={setInput} />
-            <ActionBtn label="Approve Request" cmd="approve request " onClick={setInput} />
-            <ActionBtn label="Reject Request" cmd="reject request " onClick={setInput} />
-            <ActionBtn label="Grant Admin" cmd="grant admin to " onClick={setInput} />
-          </div>
-        </div>
-        <div style={panelStyle}>
-          <div style={panelHeader}><Activity size={12} /> SYSTEM STATUS</div>
-          <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "8px" }}>
-             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                <span style={{color:"var(--muted)"}}>MCP Engine</span>
-                <span style={{color: "#10b981", fontWeight: 700}}>READY</span>
-             </div>
-             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                <span style={{color:"var(--muted)"}}>Governance</span>
-                <span style={{color: "#10b981", fontWeight: 700}}>ACTIVE</span>
-             </div>
-          </div>
-        </div>
-      </aside>
+      <RightSidebar onSetInput={setInput} />
     </main>
   );
 }
-
-function ActionBtn({ label, cmd, onClick }: { label: string, cmd: string, onClick: any }) {
-  return (
-    <button onClick={() => onClick(cmd)} style={{ width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: "10px", border: "1px solid transparent", background: "transparent", color: "var(--text)", fontSize: "0.8rem", fontWeight: 500, cursor: "pointer", transition: "all 0.12s" }} onMouseEnter={e => { e.currentTarget.style.background = "var(--surface-hover)"; e.currentTarget.style.borderColor = "var(--border)"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}>
-      {label}
-    </button>
-  );
-}
-
-const panelStyle = { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", boxShadow: "var(--shadow-sm)", overflow: "hidden" as const };
-const panelHeader = { display: "flex", alignItems: "center", gap: "8px", padding: "12px 16px", borderBottom: "1px solid var(--border)", fontSize: "0.65rem", fontWeight: 800, color: "var(--muted)", letterSpacing: "0.1em" };
-const fieldGroup = { display: "flex", flexDirection: "column" as const, gap: "4px" };
-const fieldLabel = { fontSize: "0.65rem", fontWeight: 700, color: "var(--muted)" };
-const smallInput = { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "8px", color: "var(--text)", padding: "9px 10px", fontSize: "0.8rem", outline: "none" };
-const mainInput = { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", color: "var(--text)", padding: "11px 12px 11px 30px", fontSize: "0.9rem", fontFamily: "var(--font-mono)", outline: "none" };
-const sendButton = { background: "var(--text)", color: "var(--bg)", border: "none", borderRadius: "10px", width: "44px", height: "44px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" };
-const tagStyle = { background: "transparent", border: "1px solid var(--border)", color: "var(--muted)", fontSize: "0.65rem", padding: "4px 10px", borderRadius: "8px", cursor: "pointer", fontFamily: "var(--font-mono)" };
-const initializeButton = { display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", width: "100%", padding: "11px", borderRadius: "10px", background: "var(--text)", color: "var(--bg)", border: "none", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", marginTop: "4px" };
-const toolboxGroupTitle = { marginTop: "8px", fontSize: "0.65rem", color: "var(--muted)", fontWeight: 700 };
-const historyBtnStyle = { ...tagStyle, textAlign: "left" as const, width: "100%", padding: "8px 10px", transition: "all 0.12s" };

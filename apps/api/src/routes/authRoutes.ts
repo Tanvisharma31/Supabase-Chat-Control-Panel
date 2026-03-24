@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { db } from "../infra/inMemoryStore.js";
+import { repository } from "../infra/database.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -9,7 +9,8 @@ const loginSchema = z.object({
 
 const connectSupabaseSchema = z.object({
   accessToken: z.string().min(20),
-  organizationId: z.string().min(1).optional()
+  organizationId: z.string().min(1).optional(),
+  workspaceId: z.string().uuid()
 });
 
 const supabaseApi = async (accessToken: string, endpoint: string): Promise<Response> =>
@@ -29,9 +30,7 @@ authRouter.post("/login", async (request, response) => {
     return;
   }
 
-  const existingUser = [...db.users.values()].find(
-    (user) => user.email.toLowerCase() === parsed.data.email.toLowerCase()
-  );
+  const existingUser = await repository.findUserByEmail(parsed.data.email);
 
   const user =
     existingUser ??
@@ -41,56 +40,60 @@ authRouter.post("/login", async (request, response) => {
       displayName: parsed.data.displayName
     };
 
-  db.users.set(user.id, user);
-
-  const sessionToken = crypto.randomUUID();
-  db.sessions.set(sessionToken, {
-    token: sessionToken,
-    userId: user.id,
-    createdAt: new Date().toISOString()
-  });
+  await repository.upsertUser(user);
+  const session = await repository.createSession(user.id);
+  const integration = await repository.getLatestSupabaseIntegrationForUser(user.id);
 
   response.status(200).json({
-    token: sessionToken,
+    token: session.token,
     user: {
       id: user.id,
       email: user.email,
       displayName: user.displayName
     },
-    hasSupabaseIntegration: db.integrations.has(user.id)
+    hasSupabaseIntegration: Boolean(integration)
   });
 });
 
-authRouter.post("/logout", (request, response) => {
+authRouter.post("/logout", async (request, response) => {
   const authHeader = request.header("authorization");
   const token = authHeader?.toLowerCase().startsWith("bearer ")
     ? authHeader.slice(7).trim()
     : "";
 
   if (token) {
-    db.sessions.delete(token);
+    await repository.deleteSession(token);
   }
   response.status(204).send();
 });
 
-authRouter.get("/me", (request, response) => {
+authRouter.get("/me", async (request, response) => {
   const authHeader = request.header("authorization");
   const token = authHeader?.toLowerCase().startsWith("bearer ")
     ? authHeader.slice(7).trim()
     : "";
-  const session = token ? db.sessions.get(token) : undefined;
-  const user = session ? db.users.get(session.userId) : undefined;
+  const session = token ? await repository.findSession(token) : undefined;
+  const user = session ? await repository.findUserById(session.userId) : undefined;
 
   if (!session || !user) {
     response.status(401).json({ error: "Unauthorized" });
     return;
   }
 
-  const integration = db.integrations.get(user.id);
+  const workspaceQuery = request.query.workspaceId;
+  const workspaceId =
+    typeof workspaceQuery === "string" && workspaceQuery.length > 0 ? workspaceQuery : undefined;
+
+  const integration = workspaceId
+    ? await repository.getSupabaseIntegration(workspaceId, user.id)
+    : await repository.getLatestSupabaseIntegrationForUser(user.id);
+
   response.json({
     user,
+    session: { id: session.token.slice(0, 8) },
     integration: integration
       ? {
+          workspaceId: integration.workspaceId,
           organizationId: integration.organizationId,
           connectedAt: integration.connectedAt
         }
@@ -103,7 +106,7 @@ authRouter.post("/supabase/connect", async (request, response) => {
   const token = authHeader?.toLowerCase().startsWith("bearer ")
     ? authHeader.slice(7).trim()
     : "";
-  const session = token ? db.sessions.get(token) : undefined;
+  const session = token ? await repository.findSession(token) : undefined;
 
   if (!session) {
     response.status(401).json({ error: "Unauthorized" });
@@ -135,7 +138,8 @@ authRouter.post("/supabase/connect", async (request, response) => {
     return;
   }
 
-  db.integrations.set(session.userId, {
+  await repository.upsertSupabaseIntegration({
+    workspaceId: parsed.data.workspaceId,
     userId: session.userId,
     accessToken: parsed.data.accessToken,
     organizationId: resolvedOrgId,

@@ -13,6 +13,7 @@ export interface AuthSession {
 }
 
 export interface SupabaseIntegration {
+  workspaceId: string;
   userId: string;
   accessToken: string;
   organizationId?: string;
@@ -61,12 +62,18 @@ export interface CommandIntent {
   action:
     | "list_projects"
     | "create_project"
+    | "delete_project"
     | "list_databases"
     | "create_database"
     | "grant_admin_access"
     | "list_tables"
     | "run_sql_read"
     | "run_sql_write"
+    | "seed_dummy_data"
+    | "list_branches"
+    | "create_branch"
+    | "list_edge_functions"
+    | "deploy_edge_function"
     | "approve_request"
     | "reject_request"
     | "list_approvals"

@@ -29,6 +29,13 @@ const specs: Record<string, CommandSpec> = {
     requiredRole: "admin",
     requiresApproval: false
   },
+  delete_project: {
+    name: "delete_project",
+    description: "Permanently delete a Supabase project via the Management API.",
+    riskLevel: "high",
+    requiredRole: "admin",
+    requiresApproval: true
+  },
   create_database: {
     name: "create_database",
     description: "Create a logical tenant database in a project.",
@@ -53,6 +60,41 @@ const specs: Record<string, CommandSpec> = {
   run_sql_write: {
     name: "run_sql_write",
     description: "Run write or DDL SQL query.",
+    riskLevel: "high",
+    requiredRole: "admin",
+    requiresApproval: true
+  },
+  seed_dummy_data: {
+    name: "seed_dummy_data",
+    description: "Create small sample datasets for testing through SQL.",
+    riskLevel: "high",
+    requiredRole: "admin",
+    requiresApproval: true
+  },
+  list_branches: {
+    name: "list_branches",
+    description: "List project branches/environments.",
+    riskLevel: "low",
+    requiredRole: "viewer",
+    requiresApproval: false
+  },
+  create_branch: {
+    name: "create_branch",
+    description: "Create a branch/environment for a project.",
+    riskLevel: "high",
+    requiredRole: "admin",
+    requiresApproval: true
+  },
+  list_edge_functions: {
+    name: "list_edge_functions",
+    description: "List project edge functions.",
+    riskLevel: "low",
+    requiredRole: "viewer",
+    requiresApproval: false
+  },
+  deploy_edge_function: {
+    name: "deploy_edge_function",
+    description: "Deploy an edge function to the project.",
     riskLevel: "high",
     requiredRole: "admin",
     requiresApproval: true

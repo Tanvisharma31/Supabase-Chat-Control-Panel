@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import { z } from "zod";
-import { db } from "../infra/inMemoryStore.js";
 import type { User } from "../domain/types.js";
+import { repository } from "../infra/database.js";
 
 const headerSchema = z.object({
   "x-user-id": z.string().min(1),
@@ -9,15 +9,15 @@ const headerSchema = z.object({
   "x-user-name": z.string().min(1).optional()
 });
 
-export const resolveUserFromHeaders = (request: Request): User => {
+export const resolveUserFromHeaders = async (request: Request): Promise<User> => {
   const authHeader = request.header("authorization");
   if (authHeader?.toLowerCase().startsWith("bearer ")) {
     const sessionToken = authHeader.slice(7).trim();
-    const session = db.sessions.get(sessionToken);
+    const session = await repository.findSession(sessionToken);
     if (!session) {
       throw new Error("Invalid or expired session.");
     }
-    const sessionUser = db.users.get(session.userId);
+    const sessionUser = await repository.findUserById(session.userId);
     if (!sessionUser) {
       throw new Error("Session user not found.");
     }
@@ -35,7 +35,7 @@ export const resolveUserFromHeaders = (request: Request): User => {
   }
 
   const userId = parsed.data["x-user-id"];
-  const existing = db.users.get(userId);
+  const existing = await repository.findUserById(userId);
   if (existing) {
     return existing;
   }
@@ -46,6 +46,6 @@ export const resolveUserFromHeaders = (request: Request): User => {
     displayName: parsed.data["x-user-name"] ?? `User ${userId}`
   };
 
-  db.users.set(created.id, created);
+  await repository.upsertUser(created);
   return created;
 };

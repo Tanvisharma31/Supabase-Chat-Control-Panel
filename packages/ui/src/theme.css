@@ -10,6 +10,11 @@
   --border: #e5e5e5;
   --accent: #000000;
   --accent-hover: #262626;
+  --success: #059669;
+  --success-bright: #10b981;
+  --success-soft: rgba(5, 150, 105, 0.1);
+  --ring: rgba(37, 99, 235, 0.4);
+  --terminal-tint: rgba(255, 255, 255, 0.55);
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
@@ -27,6 +32,9 @@
   --border: #27272a;
   --accent: #ffffff;
   --accent-hover: #f4f4f5;
+  --success-soft: rgba(16, 185, 129, 0.14);
+  --ring: rgba(96, 165, 250, 0.45);
+  --terminal-tint: rgba(12, 12, 14, 0.92);
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.5);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.5);
   --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5);
@@ -73,4 +81,184 @@ body {
 
 .animate-fade-in {
   animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.cp-input {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cp-input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--muted) 55%, var(--border));
+}
+
+.cp-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--ring) 80%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent);
+}
+
+.cp-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  max-height: 100vh;
+  padding: 16px 20px;
+  gap: 16px;
+  background: transparent;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    flex-direction: column;
+    max-height: none;
+    overflow: auto;
+    padding-bottom: 24px;
+  }
+}
+
+.cp-send:not(:disabled):hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.cp-send:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.cp-chip:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px 20px;
+  background: transparent;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+[data-theme="dark"] .login-card {
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+}
+
+.cp-tool-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+/* App sidebars: reliable scroll inside flex layouts + visible scrollbar */
+.cp-left-sidebar-scroll,
+.cp-right-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+}
+
+.cp-left-sidebar-scroll {
+  gap: 14px;
+  padding-right: 4px;
+}
+
+.cp-right-sidebar-scroll {
+  gap: 10px;
+  padding: 12px;
+  padding-right: 8px;
+}
+
+.cp-left-sidebar-scroll::-webkit-scrollbar,
+.cp-right-sidebar-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+
+.cp-left-sidebar-scroll::-webkit-scrollbar-track,
+.cp-right-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cp-left-sidebar-scroll::-webkit-scrollbar-thumb,
+.cp-right-sidebar-scroll::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.cp-left-sidebar-scroll::-webkit-scrollbar-thumb:hover,
+.cp-right-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--muted) 72%, var(--border));
+}
+
+/* Center terminal / chat: scroll inside flex column + same thin scrollbar */
+.cp-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+  background: color-mix(in srgb, var(--bg) 82%, var(--surface));
+}
+
+.cp-chat-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+
+.cp-chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cp-chat-scroll::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.cp-chat-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--muted) 72%, var(--border));
+}
+
+/* Small overflow lists (e.g. mentions): thin scrollbar only, no flex */
+.cp-dropdown-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+}
+
+.cp-dropdown-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.cp-dropdown-scroll::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }

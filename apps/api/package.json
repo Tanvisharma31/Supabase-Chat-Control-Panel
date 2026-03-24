@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.4.1",
     "@packages/mcp-core": "*",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",

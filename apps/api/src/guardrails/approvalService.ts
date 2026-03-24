@@ -1,5 +1,5 @@
-import { db } from "../infra/inMemoryStore.js";
 import type { ApprovalRequest } from "../domain/types.js";
+import { repository } from "../infra/database.js";
 
 export const createApprovalRequest = (
   workspaceId: string,
@@ -7,36 +7,19 @@ export const createApprovalRequest = (
   command: string,
   parameters: Record<string, string>,
   requestedBy: string
-): ApprovalRequest => {
-  const approval: ApprovalRequest = {
-    id: crypto.randomUUID(),
+): Promise<ApprovalRequest> =>
+  repository.createApprovalRequest({
     workspaceId,
     conversationId,
     command,
     parameters,
-    status: "pending",
-    requestedBy,
-    requestedAt: new Date().toISOString()
-  };
-  db.approvals.set(approval.id, approval);
-  return approval;
-};
+    requestedBy
+  });
 
 export const reviewApprovalRequest = (
+  workspaceId: string,
   approvalId: string,
   reviewerId: string,
   decision: "approved" | "rejected"
-): ApprovalRequest | undefined => {
-  const current = db.approvals.get(approvalId);
-  if (!current || current.status !== "pending") {
-    return current;
-  }
-  const updated: ApprovalRequest = {
-    ...current,
-    status: decision,
-    reviewedBy: reviewerId,
-    reviewedAt: new Date().toISOString()
-  };
-  db.approvals.set(approvalId, updated);
-  return updated;
-};
+): Promise<ApprovalRequest | undefined> =>
+  repository.reviewApprovalRequest(workspaceId, approvalId, reviewerId, decision);

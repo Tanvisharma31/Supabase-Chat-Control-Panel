@@ -16,8 +16,8 @@ import { routeIntent } from "../conversation/intentRouter.js";
 import { createApprovalRequest, reviewApprovalRequest } from "../guardrails/approvalService.js";
 import { appendAuditEvent } from "../guardrails/auditService.js";
 import { evaluatePolicy } from "../guardrails/policyEngine.js";
-import { db } from "../infra/inMemoryStore.js";
 import { upsertMembership } from "../auth/rbac.js";
+import { repository } from "../infra/database.js";
 
 const createConversationSchema = z.object({
   channel: z.enum(["web", "slack", "discord", "teams"]).default("web")
@@ -43,7 +43,31 @@ const getOrchestrator = () => {
 };
 const commandRegistry = new CommandRegistry();
 
-conversationRouter.post("/", withTenantAccess("viewer"), (request: TenantRequest, response) => {
+const supabaseApi = async (accessToken: string, endpoint: string): Promise<Response> =>
+  fetch(`https://api.supabase.com/v1${endpoint}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    }
+  });
+
+const parseConnectSupabaseCommand = (
+  rawMessage: string
+): { matched: boolean; accessToken?: string; organizationId?: string } => {
+  const match = rawMessage.trim().match(
+    /^connect\s+supabase(?:\s+(sbp_[a-z0-9]+))?(?:\s+([a-z0-9_]+))?$/i
+  );
+  if (!match) {
+    return { matched: false };
+  }
+  return {
+    matched: true,
+    accessToken: match[1]?.trim(),
+    organizationId: match[2]?.trim()
+  };
+};
+
+conversationRouter.post("/", withTenantAccess("viewer"), async (request: TenantRequest, response) => {
   if (!request.workspaceId || !request.actor) {
     response.status(400).json({ error: "Missing tenant context." });
     return;
@@ -55,7 +79,7 @@ conversationRouter.post("/", withTenantAccess("viewer"), (request: TenantRequest
     return;
   }
 
-  const conversation = createConversation(
+  const conversation = await createConversation(
     request.workspaceId,
     request.actor.id,
     parsed.data.channel
@@ -63,18 +87,22 @@ conversationRouter.post("/", withTenantAccess("viewer"), (request: TenantRequest
   response.status(201).json(conversation);
 });
 
-conversationRouter.get("/", withTenantAccess("viewer"), (request: TenantRequest, response) => {
-  const conversations = [...db.conversations.values()]
-    .filter((conversation) => conversation.workspaceId === request.workspaceId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+conversationRouter.get("/", withTenantAccess("viewer"), async (request: TenantRequest, response) => {
+  const conversations = await repository.listConversations(String(request.workspaceId));
   response.json(conversations);
 });
 
 conversationRouter.get(
   "/:conversationId/messages",
   withTenantAccess("viewer"),
-  (request: TenantRequest, response) => {
-    const messages = listConversationMessages(request.params.conversationId);
+  async (request: TenantRequest, response) => {
+    const workspaceId = String(request.workspaceId);
+    const conversation = await repository.getConversation(workspaceId, request.params.conversationId);
+    if (!conversation) {
+      response.status(404).json({ error: "Conversation not found." });
+      return;
+    }
+    const messages = await listConversationMessages(workspaceId, request.params.conversationId);
     response.json(messages);
   }
 );
@@ -93,18 +121,111 @@ conversationRouter.post(
       return;
     }
 
-    const userMessage = appendMessage(
+    const conversation = await repository.getConversation(
+      request.workspaceId,
+      request.params.conversationId
+    );
+    if (!conversation) {
+      response.status(404).json({ error: "Conversation not found." });
+      return;
+    }
+
+    const userMessage = await appendMessage(
       request.params.conversationId,
       request.workspaceId,
       "user",
       parsed.data.content
     );
+    const connectCommand = parseConnectSupabaseCommand(parsed.data.content);
+    if (connectCommand.matched) {
+      if (!request.actor) {
+        response.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const envToken = process.env.SUPABASE_ACCESS_TOKEN?.trim();
+      const envOrgId = process.env.SUPABASE_ORGANIZATION_ID?.trim();
+      const accessToken = connectCommand.accessToken ?? envToken;
+      const organizationHint = connectCommand.organizationId ?? envOrgId;
+
+      if (!accessToken) {
+        const assistantMessage = await appendMessage(
+          request.params.conversationId,
+          request.workspaceId,
+          "assistant",
+          "Supabase token missing. Use `connect supabase sbp_xxx [org_id]` in chat, or set SUPABASE_ACCESS_TOKEN in server env."
+        );
+        response.status(400).json({
+          userMessage,
+          assistantMessage,
+          error: "Supabase access token required."
+        });
+        return;
+      }
+
+      const orgResponse = await supabaseApi(accessToken, "/organizations");
+      if (!orgResponse.ok) {
+        const details = await orgResponse.text();
+        const assistantMessage = await appendMessage(
+          request.params.conversationId,
+          request.workspaceId,
+          "assistant",
+          "Failed to connect Supabase from chat. Verify token/org and try again."
+        );
+        response.status(400).json({
+          userMessage,
+          assistantMessage,
+          error: "Failed to validate Supabase access token.",
+          details
+        });
+        return;
+      }
+
+      const organizations = (await orgResponse.json()) as Array<{ id: string; name: string }>;
+      const resolvedOrgId = organizationHint ?? organizations[0]?.id;
+      if (!resolvedOrgId) {
+        const assistantMessage = await appendMessage(
+          request.params.conversationId,
+          request.workspaceId,
+          "assistant",
+          "No Supabase organization found for this token."
+        );
+        response.status(400).json({
+          userMessage,
+          assistantMessage,
+          error: "No organization found for this access token."
+        });
+        return;
+      }
+
+      await repository.upsertSupabaseIntegration({
+        workspaceId: request.workspaceId,
+        userId: request.actor.id,
+        accessToken,
+        organizationId: resolvedOrgId,
+        connectedAt: new Date().toISOString()
+      });
+
+      const assistantMessage = await appendMessage(
+        request.params.conversationId,
+        request.workspaceId,
+        "assistant",
+        `Supabase connected from chat. Organization: ${resolvedOrgId}.`
+      );
+      response.status(200).json({
+        userMessage,
+        assistantMessage,
+        intent: { action: "connect_supabase", riskLevel: "low", parameters: {} },
+        result: { ok: true, organizationId: resolvedOrgId }
+      });
+      return;
+    }
+
     const intent = routeIntent(parsed.data.content);
     const spec = commandRegistry.get(intent.action);
     const decision = evaluatePolicy(spec, request.membership?.role);
 
     if (!decision.allowed || !request.actor) {
-      appendAuditEvent(
+      await appendAuditEvent(
         request.workspaceId,
         request.actor?.id ?? "unknown",
         intent.action,
@@ -116,21 +237,27 @@ conversationRouter.post(
     }
 
     if (decision.requiresApproval) {
-      const approval = createApprovalRequest(
+      const approvalParameters: Record<string, string> = {
+        ...intent.parameters,
+        projectRef: parsed.data.projectRef ?? intent.parameters.projectRef ?? "",
+        databaseName: parsed.data.databaseName ?? intent.parameters.databaseName ?? "",
+        region: parsed.data.region ?? intent.parameters.region ?? "us-east-1"
+      };
+      const approval = await createApprovalRequest(
         request.workspaceId,
         request.params.conversationId,
         intent.action,
-        intent.parameters,
+        approvalParameters,
         request.actor.id
       );
-      appendAuditEvent(
+      await appendAuditEvent(
         request.workspaceId,
         request.actor.id,
         intent.action,
         "pending_approval",
         { approvalId: approval.id }
       );
-      const assistantMessage = appendMessage(
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
@@ -147,28 +274,28 @@ conversationRouter.post(
         return;
       }
 
-      const existingUser = db.users.get(targetUserId);
+      const existingUser = await repository.findUserById(targetUserId);
       if (!existingUser) {
-        db.users.set(targetUserId, {
+        await repository.upsertUser({
           id: targetUserId,
           email: `${targetUserId}@local.dev`,
           displayName: `User ${targetUserId}`
         });
       }
 
-      upsertMembership({
+      await upsertMembership({
         workspaceId: request.workspaceId,
         userId: targetUserId,
         role: "admin"
       });
 
-      const assistantMessage = appendMessage(
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
         `Granted admin access in workspace ${request.workspaceId} to ${targetUserId}.`
       );
-      appendAuditEvent(
+      await appendAuditEvent(
         request.workspaceId,
         request.actor.id,
         intent.action,
@@ -186,15 +313,20 @@ conversationRouter.post(
 
     if (intent.action === "approve_request") {
       const approvalId = intent.parameters.id;
-      const approval = db.approvals.get(approvalId);
-      if (!approval || approval.workspaceId !== request.workspaceId) {
+      const approval = approvalId
+        ? await repository.getApproval(request.workspaceId, approvalId)
+        : undefined;
+      if (!approval) {
         response.status(404).json({ error: "Approval request not found." });
         return;
       }
 
-      reviewApprovalRequest(approvalId, request.actor.id, "approved");
+      await reviewApprovalRequest(request.workspaceId, approvalId, request.actor.id, "approved");
       
-      const integration = db.integrations.get(approval.requestedBy);
+      const integration = await repository.getSupabaseIntegration(
+        request.workspaceId,
+        approval.requestedBy
+      );
       const result = await getOrchestrator().execute({
         command: approval.command,
         context: {
@@ -208,7 +340,7 @@ conversationRouter.post(
         payload: approval.parameters
       });
 
-      const assistantMessage = appendMessage(
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
@@ -217,32 +349,44 @@ conversationRouter.post(
           : `❌ Approved but failed execution: ${result.error}`
       );
       
-      appendAuditEvent(request.workspaceId, request.actor.id, "approve_request", "executed", { approvalId });
+      await appendAuditEvent(request.workspaceId, request.actor.id, "approve_request", "executed", { approvalId });
       response.status(200).json({ userMessage, assistantMessage, intent, result });
       return;
     }
 
     if (intent.action === "reject_request") {
       const approvalId = intent.parameters.id;
-      reviewApprovalRequest(approvalId, request.actor.id, "rejected");
-      const assistantMessage = appendMessage(
+      if (!approvalId) {
+        response.status(400).json({ error: "approval id is required." });
+        return;
+      }
+      const reviewed = await reviewApprovalRequest(
+        request.workspaceId,
+        approvalId,
+        request.actor.id,
+        "rejected"
+      );
+      if (!reviewed) {
+        response.status(404).json({ error: "Approval request not found." });
+        return;
+      }
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
         `Rejected management request ${approvalId}.`
       );
-      appendAuditEvent(request.workspaceId, request.actor.id, "reject_request", "executed", { approvalId });
+      await appendAuditEvent(request.workspaceId, request.actor.id, "reject_request", "executed", { approvalId });
       response.status(200).json({ userMessage, assistantMessage, intent });
       return;
     }
 
     if (intent.action === "list_approvals") {
-      const approvals = [...db.approvals.values()]
-        .filter(a => a.workspaceId === request.workspaceId && a.status === "pending");
+      const approvals = await repository.listPendingApprovals(request.workspaceId);
       const content = approvals.length > 0
         ? `Pending Approvals:\n${approvals.map(a => `- [${a.id.slice(0,8)}] ${a.command} by ${a.requestedBy}`).join("\n")}`
         : "No pending approvals.";
-      const assistantMessage = appendMessage(
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
@@ -252,17 +396,17 @@ conversationRouter.post(
       return;
     }
 
-    const integration = db.integrations.get(request.actor.id);
+    const integration = await repository.getSupabaseIntegration(request.workspaceId, request.actor.id);
     if (
       process.env.SUPABASE_MCP_COMMAND &&
       !integration &&
       intent.action !== "unknown"
     ) {
-      const assistantMessage = appendMessage(
+      const assistantMessage = await appendMessage(
         request.params.conversationId,
         request.workspaceId,
         "assistant",
-        "Connect your Supabase access token first. Open Profile -> Access Tokens in Supabase, create a token, then use Connect Supabase in the UI."
+        "Connect Supabase from chat first. Run `connect supabase` (uses server env) or `connect supabase sbp_xxx [org_id]`."
       );
       response.status(400).json({
         userMessage,
@@ -291,7 +435,7 @@ conversationRouter.post(
       }
     });
 
-    const assistantMessage = appendMessage(
+    const assistantMessage = await appendMessage(
       request.params.conversationId,
       request.workspaceId,
       "assistant",
@@ -300,7 +444,7 @@ conversationRouter.post(
         : `Failed ${intent.action}: ${result.error}`
     );
 
-    appendAuditEvent(
+    await appendAuditEvent(
       request.workspaceId,
       request.actor.id,
       intent.action,

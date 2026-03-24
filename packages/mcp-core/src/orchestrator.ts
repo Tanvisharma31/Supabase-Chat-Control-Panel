@@ -48,6 +48,15 @@ export class McpOrchestrator {
     workspaceId: string,
     context: CommandRequest["context"]
   ): Promise<unknown> {
+    const projectRef = String(payload.projectRef ?? context.projectRef ?? "").trim();
+    const requireProjectRef = () => {
+      if (!projectRef) {
+        throw new Error(
+          "Supabase project ref is missing. Enter it in the Project ref field in the sidebar, or include projectRef in the API request body."
+        );
+      }
+    };
+
     if (command === "list_projects") {
       return this.client.listProjects(workspaceId, context);
     }
@@ -59,26 +68,56 @@ export class McpOrchestrator {
         context
       );
     }
+    if (command === "delete_project") {
+      requireProjectRef();
+      return this.client.deleteProject(projectRef, context);
+    }
     if (command === "list_databases") {
-      return this.client.listDatabases(String(payload.projectRef ?? ""), context);
+      requireProjectRef();
+      return this.client.listDatabases(projectRef, context);
     }
     if (command === "create_database") {
+      requireProjectRef();
       return this.client.createDatabase(
-        String(payload.projectRef ?? ""),
+        projectRef,
         String(payload.databaseName ?? ""),
         context
       );
     }
     if (command === "list_tables") {
-      return this.client.listTables(String(payload.projectRef ?? ""), context);
+      requireProjectRef();
+      return this.client.listTables(projectRef, context);
+    }
+    if (command === "list_branches") {
+      requireProjectRef();
+      return this.client.listBranches(projectRef, context);
+    }
+    if (command === "create_branch") {
+      requireProjectRef();
+      return this.client.createBranch(projectRef, String(payload.branchName ?? ""), context);
+    }
+    if (command === "list_edge_functions") {
+      requireProjectRef();
+      return this.client.listEdgeFunctions(projectRef, context);
+    }
+    if (command === "deploy_edge_function") {
+      requireProjectRef();
+      return this.client.deployEdgeFunction(projectRef, String(payload.functionName ?? ""), context);
     }
     if (command === "run_sql_read" || command === "run_sql_write") {
+      requireProjectRef();
       return this.client.executeSql(
-        String(payload.projectRef ?? ""),
+        projectRef,
         String(payload.sql ?? ""),
         String(payload.databaseName ?? ""),
         context
       );
+    }
+    if (command === "seed_dummy_data") {
+      requireProjectRef();
+      const template = String(payload.template ?? "ecommerce");
+      const sql = buildSeedSql(template, String(payload.databaseName ?? context.databaseName ?? "public"));
+      return this.client.executeSql(projectRef, sql, String(payload.databaseName ?? ""), context);
     }
     if (command === "grant_admin_access") {
       if (this.client.grantAdminAccess) {
@@ -89,3 +128,30 @@ export class McpOrchestrator {
     throw new Error("Unhandled command: " + command);
   }
 }
+
+const buildSeedSql = (template: string, schema: string): string => {
+  const safeSchema = schema.trim() || "public";
+  if (template !== "ecommerce") {
+    return `select 'Unsupported template: ${template}' as message;`;
+  }
+  return `
+create schema if not exists "${safeSchema}";
+create table if not exists "${safeSchema}".products (
+  id bigserial primary key,
+  name text not null,
+  price numeric(10,2) not null,
+  created_at timestamptz not null default now()
+);
+create table if not exists "${safeSchema}".orders (
+  id bigserial primary key,
+  product_id bigint references "${safeSchema}".products(id),
+  quantity int not null,
+  created_at timestamptz not null default now()
+);
+insert into "${safeSchema}".products (name, price)
+values ('Sample T-Shirt', 29.99), ('Sample Shoes', 89.00), ('Sample Bag', 49.50)
+on conflict do nothing;
+insert into "${safeSchema}".orders (product_id, quantity)
+select id, 1 from "${safeSchema}".products limit 3;
+`;
+};

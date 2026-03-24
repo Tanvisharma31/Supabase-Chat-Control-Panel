@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { withTenantAccess, type TenantRequest } from "../middleware/tenantAccess.js";
-import { db } from "../infra/inMemoryStore.js";
+import { repository } from "../infra/database.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(2),
@@ -11,26 +11,22 @@ const createProjectSchema = z.object({
 
 export const projectRouter = Router({ mergeParams: true });
 
-projectRouter.get("/", withTenantAccess("viewer"), (request: TenantRequest, response) => {
-  const workspaceProjects = [...db.projects.values()].filter(
-    (project) => project.workspaceId === request.workspaceId
-  );
+projectRouter.get("/", withTenantAccess("viewer"), async (request: TenantRequest, response) => {
+  const workspaceProjects = await repository.listProjects(String(request.workspaceId));
   response.json(workspaceProjects);
 });
 
-projectRouter.post("/", withTenantAccess("admin"), (request: TenantRequest, response) => {
+projectRouter.post("/", withTenantAccess("admin"), async (request: TenantRequest, response) => {
   const parsed = createProjectSchema.safeParse(request.body);
   if (!parsed.success || !request.workspaceId || !request.actor) {
     response.status(400).json({ error: "Invalid payload." });
     return;
   }
 
-  const project = {
-    id: crypto.randomUUID(),
+  const project = await repository.createProject({
     workspaceId: request.workspaceId,
     createdBy: request.actor.id,
     ...parsed.data
-  };
-  db.projects.set(project.id, project);
+  });
   response.status(201).json(project);
 });

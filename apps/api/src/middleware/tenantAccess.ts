@@ -3,7 +3,7 @@ import { z } from "zod";
 import { resolveUserFromHeaders } from "../auth/authContext.js";
 import { getMembership, hasRoleAtLeast } from "../auth/rbac.js";
 import type { Role, User, WorkspaceMembership } from "../domain/types.js";
-import { db } from "../infra/inMemoryStore.js";
+import { repository } from "../infra/database.js";
 
 export interface TenantRequest extends Request {
   actor?: User;
@@ -17,9 +17,9 @@ const paramsSchema = z.object({
 
 export const withTenantAccess =
   (requiredRole: Role = "viewer") =>
-  (request: TenantRequest, response: Response, next: NextFunction) => {
+  async (request: TenantRequest, response: Response, next: NextFunction) => {
     try {
-      const actor = resolveUserFromHeaders(request);
+      const actor = await resolveUserFromHeaders(request);
       const parsed = paramsSchema.safeParse(request.params);
 
       if (!parsed.success) {
@@ -27,13 +27,13 @@ export const withTenantAccess =
         return;
       }
 
-      const workspace = db.workspaces.get(parsed.data.workspaceId);
+      const workspace = await repository.getWorkspace(parsed.data.workspaceId);
       if (!workspace) {
         response.status(404).json({ error: "Workspace not found." });
         return;
       }
 
-      const membership = getMembership(workspace.id, actor.id);
+      const membership = await getMembership(workspace.id, actor.id);
       if (!hasRoleAtLeast(membership, requiredRole)) {
         response.status(403).json({ error: "Access denied for workspace role." });
         return;

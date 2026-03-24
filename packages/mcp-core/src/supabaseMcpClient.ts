@@ -15,9 +15,18 @@ export interface SupabaseMcpClient {
     region?: string,
     context?: CommandContext
   ): Promise<unknown>;
+  deleteProject(projectRef: string, context?: CommandContext): Promise<unknown>;
   listDatabases(projectRef: string, context?: CommandContext): Promise<unknown>;
   createDatabase(projectRef: string, databaseName: string, context?: CommandContext): Promise<unknown>;
   listTables(projectRef: string, context?: CommandContext): Promise<unknown>;
+  listBranches(projectRef: string, context?: CommandContext): Promise<unknown>;
+  createBranch(projectRef: string, branchName: string, context?: CommandContext): Promise<unknown>;
+  listEdgeFunctions(projectRef: string, context?: CommandContext): Promise<unknown>;
+  deployEdgeFunction(
+    projectRef: string,
+    functionName: string,
+    context?: CommandContext
+  ): Promise<unknown>;
   executeSql(
     projectRef: string,
     sql: string,
@@ -48,6 +57,18 @@ export class MockSupabaseMcpClient implements SupabaseMcpClient {
     return next;
   }
 
+  async deleteProject(projectRef: string, context?: CommandContext): Promise<unknown> {
+    const workspaceId = context?.workspaceId ?? "";
+    const list = this.projectsByWorkspace.get(workspaceId) ?? [];
+    const next = list.filter((p) => p.projectRef !== projectRef);
+    if (next.length === list.length) {
+      throw new Error(`Project ref not found in this workspace mock: ${projectRef}`);
+    }
+    this.projectsByWorkspace.set(workspaceId, next);
+    this.databasesByProject.delete(projectRef);
+    return { deleted: true, projectRef };
+  }
+
   async listDatabases(projectRef: string): Promise<unknown> {
     const databases = [...(this.databasesByProject.get(projectRef) ?? new Set(["postgres"]))];
     return databases.map((name) => ({ name, projectRef }));
@@ -73,6 +94,22 @@ export class MockSupabaseMcpClient implements SupabaseMcpClient {
       { name: "workspaces", projectRef },
       { name: "messages", projectRef }
     ];
+  }
+
+  async listBranches(projectRef: string): Promise<unknown> {
+    return [{ projectRef, id: "main", name: "main", status: "active" }];
+  }
+
+  async createBranch(projectRef: string, branchName: string): Promise<unknown> {
+    return { projectRef, id: `br_${crypto.randomUUID().slice(0, 8)}`, name: branchName, status: "active" };
+  }
+
+  async listEdgeFunctions(projectRef: string): Promise<unknown> {
+    return [{ projectRef, name: "hello-world" }];
+  }
+
+  async deployEdgeFunction(projectRef: string, functionName: string): Promise<unknown> {
+    return { projectRef, name: functionName, deployed: true };
   }
 
   async executeSql(projectRef: string, sql: string, databaseName?: string): Promise<unknown> {

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { resolveUserFromHeaders } from "../auth/authContext.js";
 import { upsertMembership } from "../auth/rbac.js";
-import { db } from "../infra/inMemoryStore.js";
+import { repository } from "../infra/database.js";
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(2)
@@ -10,9 +10,9 @@ const createWorkspaceSchema = z.object({
 
 export const workspaceRouter = Router();
 
-workspaceRouter.post("/", (request, response) => {
+workspaceRouter.post("/", async (request, response) => {
   try {
-    const actor = resolveUserFromHeaders(request);
+    const actor = await resolveUserFromHeaders(request);
     const parsed = createWorkspaceSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -20,15 +20,8 @@ workspaceRouter.post("/", (request, response) => {
       return;
     }
 
-    const workspaceId = crypto.randomUUID();
-    const workspace = {
-      id: workspaceId,
-      name: parsed.data.name,
-      createdBy: actor.id
-    };
-
-    db.workspaces.set(workspace.id, workspace);
-    upsertMembership({
+    const workspace = await repository.createWorkspace(parsed.data.name, actor.id);
+    await upsertMembership({
       workspaceId: workspace.id,
       userId: actor.id,
       role: "owner"
@@ -40,12 +33,10 @@ workspaceRouter.post("/", (request, response) => {
   }
 });
 
-workspaceRouter.get("/", (request, response) => {
+workspaceRouter.get("/", async (request, response) => {
   try {
-    const actor = resolveUserFromHeaders(request);
-    const list = [...db.workspaces.values()].filter((workspace) =>
-      db.memberships.has(db.membershipKey(workspace.id, actor.id))
-    );
+    const actor = await resolveUserFromHeaders(request);
+    const list = await repository.listWorkspacesForUser(actor.id);
     response.json(list);
   } catch (error) {
     response.status(401).json({ error: (error as Error).message });

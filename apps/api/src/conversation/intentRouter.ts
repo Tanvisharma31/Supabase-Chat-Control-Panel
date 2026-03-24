@@ -26,6 +26,19 @@ export const routeIntent = (message: string): CommandIntent => {
     };
   }
 
+  const deleteProjectMatch = value.match(/^delete project\s+([a-z0-9_]+)\s*$/i);
+  if (deleteProjectMatch) {
+    return {
+      action: "delete_project",
+      riskLevel: "high",
+      parameters: { projectRef: deleteProjectMatch[1].trim() }
+    };
+  }
+
+  if (value === "delete project") {
+    return { action: "delete_project", riskLevel: "high", parameters: {} };
+  }
+
   const grantAdminMatch = value.match(/^grant admin(?: access)? to\s+([a-z0-9_\-@.]+)$/i);
   if (grantAdminMatch) {
     return {
@@ -43,8 +56,69 @@ export const routeIntent = (message: string): CommandIntent => {
     return { action: "list_databases", riskLevel: "low", parameters: {} };
   }
 
+  const listTablesInMatch = value.match(/^list tables\s+in\s+([a-z0-9_]+)\s*$/i);
+  if (listTablesInMatch) {
+    return {
+      action: "list_tables",
+      riskLevel: "low",
+      parameters: { projectRef: listTablesInMatch[1].trim() }
+    };
+  }
+
   if (value.includes("list tables") || value.includes("show tables")) {
     return { action: "list_tables", riskLevel: "low", parameters: {} };
+  }
+
+  const listBranchesInMatch = value.match(/^list branches\s+in\s+([a-z0-9_]+)\s*$/i);
+  if (listBranchesInMatch) {
+    return {
+      action: "list_branches",
+      riskLevel: "low",
+      parameters: { projectRef: listBranchesInMatch[1].trim() }
+    };
+  }
+
+  if (value.includes("list branches") || value.includes("show branches")) {
+    return { action: "list_branches", riskLevel: "low", parameters: {} };
+  }
+
+  const createBranchMatch = value.match(/^create branch\s+([a-z0-9_\-]+)$/i);
+  if (createBranchMatch) {
+    return {
+      action: "create_branch",
+      riskLevel: "high",
+      parameters: { branchName: createBranchMatch[1].trim() }
+    };
+  }
+
+  const listEdgeInMatch = value.match(/^list edge functions?\s+in\s+([a-z0-9_]+)\s*$/i);
+  if (listEdgeInMatch) {
+    return {
+      action: "list_edge_functions",
+      riskLevel: "low",
+      parameters: { projectRef: listEdgeInMatch[1].trim() }
+    };
+  }
+
+  if (value.includes("list edge functions") || value.includes("show edge functions")) {
+    return { action: "list_edge_functions", riskLevel: "low", parameters: {} };
+  }
+
+  const deployEdgeMatch = value.match(/^deploy edge function\s+([a-z0-9_\-]+)$/i);
+  if (deployEdgeMatch) {
+    return {
+      action: "deploy_edge_function",
+      riskLevel: "high",
+      parameters: { functionName: deployEdgeMatch[1].trim() }
+    };
+  }
+
+  if (value.includes("seed ecommerce") || value.includes("seed dummy")) {
+    return {
+      action: "seed_dummy_data",
+      riskLevel: "high",
+      parameters: { template: "ecommerce" }
+    };
   }
 
   if (value.includes("select ")) {
@@ -58,10 +132,10 @@ export const routeIntent = (message: string): CommandIntent => {
   if (
     value.includes("insert ") ||
     value.includes("update ") ||
-    value.includes("delete ") ||
+    (value.includes("delete ") && !value.startsWith("delete project")) ||
     value.includes("alter ") ||
     value.includes("drop ") ||
-    value.includes("create ")
+    (value.includes("create ") && !value.startsWith("create project") && !value.startsWith("create database") && !value.startsWith("create branch"))
   ) {
     return {
       action: "run_sql_write",
