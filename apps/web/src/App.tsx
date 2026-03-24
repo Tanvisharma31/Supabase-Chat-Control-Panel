@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef, FormEvent, ChangeEvent } from "react";
+import { apiUrl } from "./apiBase.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { LeftSidebar } from "./components/LeftSidebar.js";
 import { LoginView } from "./components/LoginView.js";
@@ -75,7 +76,7 @@ export function App() {
   }, [authToken]);
 
   const loadHistory = async (nextWorkspaceId: string) => {
-    const res = await fetch(`/api/workspaces/${nextWorkspaceId}/conversations`, { headers: authHeaders });
+    const res = await fetch(apiUrl(`/workspaces/${nextWorkspaceId}/conversations`), { headers: authHeaders });
     if (!res.ok) return;
     const rows = await res.json();
     setConversationList(rows.map((row: { id: string; createdAt: string }) => ({ id: row.id, createdAt: row.createdAt })));
@@ -84,7 +85,7 @@ export function App() {
   const loadConversationMessages = async (wsId: string, nextConversationId: string) => {
     if (!wsId || !nextConversationId) return;
     const response = await fetch(
-      `/api/workspaces/${wsId}/conversations/${nextConversationId}/messages`,
+      apiUrl(`/workspaces/${wsId}/conversations/${nextConversationId}/messages`),
       { headers: authHeaders }
     );
     if (!response.ok) return;
@@ -98,7 +99,7 @@ export function App() {
   };
 
   const startNewConversation = async (wsId: string) => {
-    const cRes = await fetch(`/api/workspaces/${wsId}/conversations`, {
+    const cRes = await fetch(apiUrl(`/workspaces/${wsId}/conversations`), {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ channel: "web" })
@@ -113,7 +114,7 @@ export function App() {
   useEffect(() => {
     const hydrate = async () => {
       if (!authToken) return;
-      const res = await fetch("/api/auth/me", { headers: authHeaders });
+      const res = await fetch(apiUrl("/auth/me"), { headers: authHeaders });
       if (!res.ok) {
         localStorage.removeItem("cp_auth_token");
         setAuthToken("");
@@ -123,14 +124,14 @@ export function App() {
       setUserId(payload.user.id);
       setSessionPreview(payload.session?.id ?? authToken.slice(0, 8));
 
-      const workspaceRes = await fetch("/api/workspaces", { headers: authHeaders });
+      const workspaceRes = await fetch(apiUrl("/workspaces"), { headers: authHeaders });
       if (workspaceRes.ok) {
         const rows = await workspaceRes.json();
         setWorkspaces(rows.map((row: { id: string; name: string }) => ({ id: row.id, name: row.name })));
         if (rows[0]?.id) {
           const wid = rows[0].id as string;
           setWorkspaceId(wid);
-          const meWs = await fetch(`/api/auth/me?workspaceId=${encodeURIComponent(wid)}`, {
+          const meWs = await fetch(`${apiUrl("/auth/me")}?workspaceId=${encodeURIComponent(wid)}`, {
             headers: authHeaders
           });
           if (meWs.ok) {
@@ -141,7 +142,7 @@ export function App() {
             }
           }
           await loadHistory(wid);
-          const convRes = await fetch(`/api/workspaces/${wid}/conversations`, { headers: authHeaders });
+          const convRes = await fetch(apiUrl(`/workspaces/${wid}/conversations`), { headers: authHeaders });
           if (convRes.ok) {
             const convRows = await convRes.json();
             if (convRows[0]?.id) {
@@ -159,7 +160,7 @@ export function App() {
 
   const login = async () => {
     setStatus("Logging in...");
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(apiUrl("/auth/login"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, displayName })
@@ -178,7 +179,7 @@ export function App() {
 
   const logout = async () => {
     if (authToken) {
-      await fetch("/api/auth/logout", {
+      await fetch(apiUrl("/auth/logout"), {
         method: "POST",
         headers: authHeaders
       });
@@ -197,7 +198,7 @@ export function App() {
   const connectSupabase = async () => {
     if (!authToken || !accessToken.trim() || !workspaceId) return;
     setStatus("Connecting Supabase...");
-    const res = await fetch("/api/auth/supabase/connect", {
+    const res = await fetch(apiUrl("/auth/supabase/connect"), {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({
@@ -230,7 +231,7 @@ export function App() {
   const bootstrap = async () => {
     if (!authToken) return;
     setStatus("Bootstrapping...");
-    const res = await fetch("/api/workspaces", {
+    const res = await fetch(apiUrl("/workspaces"), {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ name: workspaceName })
@@ -239,7 +240,7 @@ export function App() {
     const ws = await res.json();
     setWorkspaceId(ws.id);
     setWorkspaces((prev) => [{ id: ws.id, name: ws.name }, ...prev.filter((item) => item.id !== ws.id)]);
-    const cRes = await fetch(`/api/workspaces/${ws.id}/conversations`, {
+    const cRes = await fetch(apiUrl(`/workspaces/${ws.id}/conversations`), {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },
       body: JSON.stringify({ channel: "web" })
@@ -255,7 +256,7 @@ export function App() {
     setWorkspaceId(nextWorkspaceId);
     setConversationId("");
     setMessages([{ role: "assistant", content: "Switching workspace…" }]);
-    const meWs = await fetch(`/api/auth/me?workspaceId=${encodeURIComponent(nextWorkspaceId)}`, {
+    const meWs = await fetch(`${apiUrl("/auth/me")}?workspaceId=${encodeURIComponent(nextWorkspaceId)}`, {
       headers: authHeaders
     });
     if (meWs.ok) {
@@ -266,7 +267,7 @@ export function App() {
       }
     }
     await loadHistory(nextWorkspaceId);
-    const convRes = await fetch(`/api/workspaces/${nextWorkspaceId}/conversations`, { headers: authHeaders });
+    const convRes = await fetch(apiUrl(`/workspaces/${nextWorkspaceId}/conversations`), { headers: authHeaders });
     if (!convRes.ok) return;
     const convRows = await convRes.json();
     if (convRows[0]?.id) {
@@ -327,7 +328,7 @@ export function App() {
     setMessages((prev) => [...prev, { role: "user", content: finalInput }]);
 
     const response = await fetch(
-      `/api/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
+      apiUrl(`/workspaces/${workspaceId}/conversations/${conversationId}/messages`),
       {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders },
