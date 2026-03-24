@@ -3,3 +3,5 @@ dist
 .env
 .turbo
 coverage
+.env.local
+*.png
