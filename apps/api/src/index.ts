@@ -14,7 +14,40 @@ import { workspaceRouter } from "./routes/workspaceRoutes.js";
 import { authRouter } from "./routes/authRoutes.js";
 
 const app = express();
-app.use(cors());
+
+const corsExtraOrigins =
+  process.env.CORS_ORIGIN?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean) ?? [];
+const corsStaticAllow = new Set<string>([
+  "https://supabase-chat-control-panel-web.vercel.app",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  ...corsExtraOrigins
+]);
+
+function isAllowedCorsOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (corsStaticAllow.has(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname.endsWith(".vercel.app")) return true;
+  } catch {
+    /* ignore malformed Origin */
+  }
+  return false;
+}
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, isAllowedCorsOrigin(origin));
+    },
+    allowedHeaders: ["Authorization", "Content-Type"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    maxAge: 86_400
+  })
+);
 app.use(express.json());
 
 app.get("/health", (_, response) => {
