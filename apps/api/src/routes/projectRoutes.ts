@@ -18,15 +18,24 @@ projectRouter.get("/", withTenantAccess("viewer"), async (request: TenantRequest
 
 projectRouter.post("/", withTenantAccess("admin"), async (request: TenantRequest, response) => {
   const parsed = createProjectSchema.safeParse(request.body);
-  if (!parsed.success || !request.workspaceId || !request.actor) {
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid payload." });
+    return;
+  }
+  const workspaceId = request.workspaceId;
+  const actor = request.actor;
+  if (!workspaceId || !actor) {
     response.status(400).json({ error: "Invalid payload." });
     return;
   }
 
+  const { name, projectRef, encryptedAccessToken } = parsed.data;
   const project = await repository.createProject({
-    workspaceId: request.workspaceId,
-    createdBy: request.actor.id,
-    ...parsed.data
+    workspaceId,
+    createdBy: actor.id,
+    name,
+    projectRef,
+    encryptedAccessToken
   });
   response.status(201).json(project);
 });
